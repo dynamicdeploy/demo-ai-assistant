@@ -19,52 +19,132 @@ from concurrent.futures import ThreadPoolExecutor
 import datetime
 import textwrap
 import time
+import os
+from pathlib import Path
 
 import streamlit as st
-from snowflake.core import Root
-from snowflake.cortex import complete
+from dotenv import load_dotenv
+from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import HumanMessage
+from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import HuggingFaceEmbeddings
 
+# Load environment variables from .env file
+env_path = Path(__file__).parent / ".env"
+load_dotenv(env_path)
 
 st.set_page_config(page_title="Streamlit AI assistant", page_icon="✨")
 
 # -----------------------------------------------------------------------------
 # Set things up.
 
+# Initialize LangChain components
+@st.cache_resource
+def get_llm(_provider=None, _base_url=None, _model_name=None):
+    """Initialize the LangChain chat model based on PROVIDER env var.
+    
+    The underscore-prefixed parameters are used as cache keys to force refresh
+    when env vars change. They're read from env inside the function.
+    """
+    # Reload .env to ensure fresh values (in case it was updated)
+    load_dotenv(env_path, override=True)
+    
+    # Strip quotes and whitespace from env vars
+    # Try both MODEL and MODEL_NAME for compatibility
+    provider = os.getenv("PROVIDER", "").strip().strip('"').strip("'").lower()
+    model_name = os.getenv("MODEL_NAME", "").strip().strip('"').strip("'") or os.getenv("MODEL", "").strip().strip('"').strip("'")
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").strip().strip('"').strip("'")
+    
+    if provider == "openai":
+        api_key = os.getenv("OPENAI_API_KEY", "").strip().strip('"').strip("'")
+        if not api_key:
+            st.error("OPENAI_API_KEY not found in .env file")
+            st.stop()
+        model = model_name if model_name else "gpt-4o-mini"
+        return ChatOpenAI(model=model, temperature=0.7, api_key=api_key)
+    
+    elif provider == "ollama":
+        model = model_name if model_name else "llama3"
+        # Show connection info with actual values
+        st.info(f"🔗 Connecting to Ollama at: `{base_url}` with model: `{model}`")
+        if DEBUG_MODE:
+            st.code(f"Provider: {provider}\nBase URL: {base_url}\nModel: {model}\nMODEL_NAME env: {os.getenv('MODEL_NAME')}\nMODEL env: {os.getenv('MODEL')}")
+        return ChatOllama(model=model, base_url=base_url, temperature=0.7)
+    
+    elif provider == "anthropic":
+        api_key = os.getenv("ANTHROPIC_API_KEY", "").strip().strip('"').strip("'")
+        if not api_key:
+            st.error("ANTHROPIC_API_KEY not found in .env file")
+            st.stop()
+        model = model_name if model_name else "claude-3-5-sonnet-20240620"
+        return ChatAnthropic(model=model, temperature=0.7, api_key=api_key)
+    
+    else:
+        st.error(
+            f"Invalid PROVIDER: '{provider}'. Please set PROVIDER in your .env file to one of: openai, ollama, or anthropic\n\n"
+            "Example:\n"
+            "PROVIDER=ollama\n"
+            "OLLAMA_BASE_URL=http://192.168.5.217:11434\n"
+            "MODEL_NAME=llama3"
+        )
+        st.stop()
 
-@st.cache_resource(ttl="5m")
-def get_session():
-    return st.connection("snowflake").session()
+
+@st.cache_resource
+def get_embeddings():
+    """Initialize embeddings model for vector search."""
+    return HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2"
+    )
 
 
-root = Root(get_session())
+@st.cache_resource
+def get_pages_vectorstore():
+    """Initialize or load vector store for documentation pages."""
+    embeddings = get_embeddings()
+    # For now, return None - can be populated with actual data later
+    # In production, you would load from a persisted FAISS index
+    return None
+
+
+@st.cache_resource
+def get_docstrings_vectorstore():
+    """Initialize or load vector store for docstrings."""
+    embeddings = get_embeddings()
+    # For now, return None - can be populated with actual data later
+    # In production, you would load from a persisted FAISS index
+    return None
+
+
 executor = ThreadPoolExecutor(max_workers=5)
 
-MODEL = "claude-3-5-sonnet"
-
-DB = "ST_ASSISTANT"
-SCHEMA = "PUBLIC"
-DOCSTRINGS_SEARCH_SERVICE = "STREAMLIT_DOCSTRINGS_SEARCH_SERVICE"
-PAGES_SEARCH_SERVICE = "STREAMLIT_DOCS_PAGES_SEARCH_SERVICE"
+# Get model name from .env or use default based on provider
+# Reload to ensure fresh values
+load_dotenv(env_path, override=True)
+provider = os.getenv("PROVIDER", "").strip().strip('"').strip("'").lower()
+model_from_env = os.getenv("MODEL_NAME", "").strip().strip('"').strip("'") or os.getenv("MODEL", "").strip().strip('"').strip("'")
+if provider == "openai":
+    MODEL = model_from_env if model_from_env else "gpt-4o-mini"
+elif provider == "ollama":
+    MODEL = model_from_env if model_from_env else "llama3"
+elif provider == "anthropic":
+    MODEL = model_from_env if model_from_env else "claude-3-5-sonnet-20240620"
+else:
+    MODEL = model_from_env if model_from_env else "gpt-4o-mini"
 HISTORY_LENGTH = 5
 SUMMARIZE_OLD_HISTORY = True
 DOCSTRINGS_CONTEXT_LEN = 10
 PAGES_CONTEXT_LEN = 10
 MIN_TIME_BETWEEN_REQUESTS = datetime.timedelta(seconds=3)
 
-CORTEX_URL = (
-    "https://docs.snowflake.com/en/guides-overview-ai-features"
-    "?utm_source=streamlit"
-    "&utm_medium=referral"
-    "&utm_campaign=streamlit-demo-apps"
-    "&utm_content=streamlit-assistant"
-)
-
 GITHUB_URL = "https://github.com/streamlit/streamlit-assistant"
 
 DEBUG_MODE = st.query_params.get("debug", "false").lower() == "true"
 
 INSTRUCTIONS = textwrap.dedent("""
-    - You are a helpful AI chat assistant focused on answering quesions about
+    - You are a helpful AI chat assistant focused on answering questions about
       Streamlit, Streamlit Community Cloud, Snowflake, and general Python.
     - You will be given extra information provided inside tags like this
       <foo></foo>.
@@ -204,12 +284,24 @@ def build_question_prompt(question):
 
 def generate_chat_summary(messages):
     """Summarizes the chat history in `messages`."""
+    # Reload env to get fresh values
+    load_dotenv(env_path, override=True)
+    provider = os.getenv("PROVIDER", "").strip().strip('"').strip("'").lower()
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").strip().strip('"').strip("'")
+    model_name = os.getenv("MODEL_NAME", "").strip().strip('"').strip("'") or os.getenv("MODEL", "").strip().strip('"').strip("'")
+    
+    llm = get_llm(_provider=provider, _base_url=base_url, _model_name=model_name)
     prompt = build_prompt(
         instructions="Summarize this conversation as concisely as possible.",
         conversation=history_to_text(messages),
     )
-
-    return complete(MODEL, prompt, session=get_session())
+    
+    try:
+        response = llm.invoke([HumanMessage(content=prompt)])
+        return response.content
+    except Exception as e:
+        st.warning(f"Error generating summary: {e}")
+        return "Previous conversation context unavailable."
 
 
 def history_to_text(chat_history):
@@ -219,57 +311,73 @@ def history_to_text(chat_history):
 
 def search_relevant_pages(query):
     """Searches the markdown contents of Streamlit's documentation."""
-    cortex_search_service = (
-        root.databases[DB].schemas[SCHEMA].cortex_search_services[PAGES_SEARCH_SERVICE]
-    )
-
-    context_documents = cortex_search_service.search(
-        query,
-        columns=["PAGE_URL", "PAGE_CHUNK"],
-        filter={},
-        limit=PAGES_CONTEXT_LEN,
-    )
-
-    results = context_documents.results
-
-    context = [f"[{row['PAGE_URL']}]: {row['PAGE_CHUNK']}" for row in results]
-    context_str = "\n".join(context)
-
-    return context_str
+    vectorstore = get_pages_vectorstore()
+    
+    if vectorstore is None:
+        # Return placeholder - in production, this would search the vector store
+        return "Documentation pages search is not yet configured. Please set up the vector store with documentation data."
+    
+    try:
+        embeddings = get_embeddings()
+        # Perform similarity search
+        docs = vectorstore.similarity_search(query, k=PAGES_CONTEXT_LEN)
+        context = [f"[{doc.metadata.get('PAGE_URL', 'Unknown')}]: {doc.page_content}" for doc in docs]
+        return "\n".join(context)
+    except Exception as e:
+        st.warning(f"Error searching pages: {e}")
+        return "Error searching documentation pages."
 
 
 def search_relevant_docstrings(query):
     """Searches the docstrings of Streamlit's commands."""
-    cortex_search_service = (
-        root.databases[DB]
-        .schemas[SCHEMA]
-        .cortex_search_services[DOCSTRINGS_SEARCH_SERVICE]
-    )
-
-    context_documents = cortex_search_service.search(
-        query,
-        columns=["STREAMLIT_VERSION", "COMMAND_NAME", "DOCSTRING_CHUNK"],
-        filter={"@eq": {"STREAMLIT_VERSION": "latest"}},
-        limit=DOCSTRINGS_CONTEXT_LEN,
-    )
-
-    results = context_documents.results
-
-    context = [
-        f"[Document {i}]: {row['DOCSTRING_CHUNK']}" for i, row in enumerate(results)
-    ]
-    context_str = "\n".join(context)
-
-    return context_str
+    vectorstore = get_docstrings_vectorstore()
+    
+    if vectorstore is None:
+        # Return placeholder - in production, this would search the vector store
+        return "Docstrings search is not yet configured. Please set up the vector store with docstring data."
+    
+    try:
+        embeddings = get_embeddings()
+        # Perform similarity search
+        docs = vectorstore.similarity_search(query, k=DOCSTRINGS_CONTEXT_LEN)
+        context = [f"[Document {i}]: {doc.page_content}" for i, doc in enumerate(docs)]
+        return "\n".join(context)
+    except Exception as e:
+        st.warning(f"Error searching docstrings: {e}")
+        return "Error searching docstrings."
 
 
 def get_response(prompt):
-    return complete(
-        MODEL,
-        prompt,
-        stream=True,
-        session=get_session(),
-    )
+    """Get streaming response from LLM."""
+    # Reload env to get fresh values and pass as cache keys
+    load_dotenv(env_path, override=True)
+    provider = os.getenv("PROVIDER", "").strip().strip('"').strip("'").lower()
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").strip().strip('"').strip("'")
+    model_name = os.getenv("MODEL_NAME", "").strip().strip('"').strip("'") or os.getenv("MODEL", "").strip().strip('"').strip("'")
+    
+    llm = get_llm(_provider=provider, _base_url=base_url, _model_name=model_name)
+    messages = [HumanMessage(content=prompt)]
+    
+    def stream_generator():
+        try:
+            for chunk in llm.stream(messages):
+                if hasattr(chunk, 'content'):
+                    yield chunk.content
+                else:
+                    yield str(chunk)
+        except Exception as e:
+            error_msg = str(e)
+            if "Connection refused" in error_msg or "Errno 61" in error_msg:
+                yield "❌ **Connection Error:** Cannot connect to Ollama server.\n\n"
+                yield "Please make sure Ollama is running:\n"
+                yield "```bash\n"
+                yield "ollama serve\n"
+                yield "```\n\n"
+                yield "Or check your `OLLAMA_BASE_URL` in the `.env` file."
+            else:
+                yield f"❌ **Error:** {error_msg}"
+    
+    return stream_generator()
 
 
 def send_telemetry(**kwargs):
@@ -305,8 +413,8 @@ def show_feedback_controls(message_index):
 @st.dialog("Legal disclaimer")
 def show_disclaimer_dialog():
     st.caption("""
-            This AI chatbot is powered by Snowflake and public Streamlit
-            information. Answers may be inaccurate, inefficient, or biased.
+            This AI chatbot is powered by LangChain and LLM providers (OpenAI, Ollama, etc.), 
+            using public Streamlit information. Answers may be inaccurate, inefficient, or biased.
             Any use or decisions based on such answers should include reasonable
             practices including human oversight to ensure they are safe,
             accurate, and suitable for your intended purpose. Streamlit is not
@@ -314,10 +422,8 @@ def show_disclaimer_dialog():
             of the chatbot. Do not enter any private, sensitive, personal, or
             regulated data. By using this chatbot, you acknowledge and agree
             that input you provide and answers you receive (collectively,
-            “Content”) may be used by Snowflake to provide, maintain, develop,
-            and improve their respective offerings. For more
-            information on how Snowflake may use your Content, see
-            https://streamlit.io/terms-of-service.
+            "Content") may be used to improve the service. For more
+            information, see https://streamlit.io/terms-of-service.
         """)
 
 

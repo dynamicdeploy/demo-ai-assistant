@@ -1,23 +1,11 @@
 # Streamlit AI assistant &mdash; a documentation chatbot for Streamlit
 
 Ever wanted to chat with the Streamlit documentation? Well, with the power of
-[Snowflake Cortex](https://docs.snowflake.com/en/guides-overview-ai-features?utm_source=streamlit&utm_medium=referral&utm_campaign=streamlit-demo-apps&utm_content=streamlit-assistant)
-now you can!
-
-You can try out the AI Assistant app below:
-
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://st-assistant.streamlit.app/)
+LangChain and modern LLMs (OpenAI, Anthropic Claude, or Ollama), now you can!
 
 ## Running it yourself
 
-### Snowflake backend setup
-
-1. Open the worksheet at `snowflake/initial_setup.sql` in Snowflake and run it.
-
-1. Open the notebook at `snowflake/populate_st_assistant_data.ipynb` in Snowflake and follow the
-   instructions in there.
-
-### Try the app on your machine
+### Prerequisites
 
 1. Get the code:
 
@@ -25,7 +13,7 @@ You can try out the AI Assistant app below:
    $ git clone https://github.com/streamlit/demo-ai-assistant
    ```
 
-1. Start a virtual environment and get the dependencies (requires uv):
+2. Start a virtual environment and get the dependencies (requires uv):
 
    ```sh
    $ uv venv
@@ -33,24 +21,45 @@ You can try out the AI Assistant app below:
    $ uv sync
    ```
 
-1. Add your Snowflake account to `.streamlit/secrets.toml` under `[connections.snowflake]`
+   Or using pip:
 
-   ```toml
-   [connections.snowflake]
-   account = "YOUR_ACCOUNT_GOES_HERE" # <-- Change this
-   # This is the user we set up for you in the pipeline setup steps:
-   user = "ST_ASSISTANT_USER"
-   # In the Snowflake UI, create an API token for the user above and paste here:
-   password = "PASTE_TOKEN_HERE" # <-- Change this
-   # Everything below was already set up in the pipeline steps:
-   role = "ST_ASSISTANT_USER"
-   warehouse = "COMPUTE_WH"
-   database = "ST_ASSISTANT_DEV"
-   schema = "PUBLIC"
+   ```sh
+   $ python -m venv venv
+   $ source venv/bin/activate  # On Windows: venv\Scripts\activate
+   $ pip install -e .
    ```
 
-1. Start the app:
+### Configuration
 
-    ```sh
-    $ streamlit run streamlit_app.py
-    ```
+Create a `.env` file in the project root with at least one of the following LLM provider configurations:
+
+**Option 1: OpenAI**
+```env
+OPENAI_API_KEY=your_openai_api_key_here
+MODEL_NAME=gpt-4o
+```
+
+**Option 2: Anthropic Claude**
+```env
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
+MODEL_NAME=claude-3-5-sonnet-20241022
+```
+
+**Option 3: Ollama (local)**
+```env
+OLLAMA_BASE_URL=http://localhost:11434
+MODEL_NAME=llama3
+```
+
+**Note:** 
+- `MODEL_NAME` is optional and will use provider defaults if not set
+- Priority: OpenAI > Anthropic > Ollama (first available will be used)
+- See `.env.example` for a template
+
+### Start the app
+
+```sh
+$ streamlit run streamlit_app.py
+```
+
+The app will automatically detect which LLM provider to use based on your `.env` configuration.
